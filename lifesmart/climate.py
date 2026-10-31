@@ -1,151 +1,119 @@
 """Support for the LifeSmart climate devices."""
 import logging
 import time
-from homeassistant.components.climate import ENTITY_ID_FORMAT, ClimateEntity
-from homeassistant.components.climate.const import (
-    HVAC_MODE_AUTO,
-    HVAC_MODE_COOL,
-    HVAC_MODE_FAN_ONLY,
-    HVAC_MODE_HEAT,
-    HVAC_MODE_DRY,
-    SUPPORT_FAN_MODE,
-    SUPPORT_TARGET_TEMPERATURE,
-    HVAC_MODE_OFF,
-)
 
+from homeassistant.components.climate import (
+    ENTITY_ID_FORMAT,
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACMode,
+)
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     PRECISION_WHOLE,
-    TEMP_CELSIUS,
-    TEMP_FAHRENHEIT,
+    UnitOfTemperature,
 )
 
-from . import LifeSmartEntity
+from . import DOMAIN, LifeSmartEntity, get_fan_mode
+
 _LOGGER = logging.getLogger(__name__)
 DEVICE_TYPE = "climate"
 
-LIFESMART_STATE_LIST = [HVAC_MODE_OFF,
-HVAC_MODE_AUTO,
-HVAC_MODE_FAN_ONLY,
-HVAC_MODE_COOL,
-HVAC_MODE_HEAT,
-HVAC_MODE_DRY]
+LIFESMART_STATE_LIST = [
+    HVACMode.OFF,
+    HVACMode.AUTO,
+    HVACMode.FAN_ONLY,
+    HVACMode.COOL,
+    HVACMode.HEAT,
+    HVACMode.DRY,
+]
 
-LIFESMART_STATE_LIST2 = [HVAC_MODE_OFF,
-HVAC_MODE_HEAT]
+LIFESMART_STATE_LIST2 = [
+    HVACMode.OFF,
+    HVACMode.HEAT,
+]
 
-SPEED_OFF = "Speed_Off"
 SPEED_LOW = "Speed_Low"
 SPEED_MEDIUM = "Speed_Medium"
 SPEED_HIGH = "Speed_High"
 
 FAN_MODES = [SPEED_LOW, SPEED_MEDIUM, SPEED_HIGH]
-GET_FAN_SPEED = { SPEED_LOW:15, SPEED_MEDIUM:45, SPEED_HIGH:76 }
+GET_FAN_SPEED = {SPEED_LOW: 15, SPEED_MEDIUM: 45, SPEED_HIGH: 76}
 
-AIR_TYPES=["V_AIR_P"]
+AIR_TYPES = ["V_AIR_P"]
 
 THER_TYPES = ["SL_CP_DN"]
 
 
-LIFESMART_STATE_LIST
-
-def setup_platform(hass, config, add_entities, discovery_info=None):
+async def async_setup_entry(hass, entry, async_add_entities):
     """Set up LifeSmart Climate devices."""
-    if discovery_info is None:
-        return
+    store = hass.data[DOMAIN]
     devices = []
-    dev = discovery_info.get("dev")
-    param = discovery_info.get("param")
-    devices = []
-    if "T" not in dev['data'] and "P3" not in dev['data']:
-        return
-    devices.append(LifeSmartClimateEntity(dev,"idx","0",param))
-    add_entities(devices)
+    for dev in store["platform_devices"].get("climate", []):
+        if "T" not in dev.get("data", {}) and "P3" not in dev.get("data", {}):
+            continue
+        devices.append(LifeSmartClimateEntity(dev, "idx", "0", store["param"]))
+    async_add_entities(devices)
+
 
 class LifeSmartClimateEntity(LifeSmartEntity, ClimateEntity):
-    """LifeSmart climate devices,include air conditioner,heater."""
+    """LifeSmart climate devices, include air conditioner, heater."""
 
     def __init__(self, dev, idx, val, param):
-        """Init LifeSmart cover device."""
+        """Init LifeSmart climate device."""
         super().__init__(dev, idx, val, param)
-        self._name = dev['name']
-        cdata = dev['data']
-        #_LOGGER.info("climate.py_cdata: %s",str(cdata))
-        self.entity_id = ENTITY_ID_FORMAT.format(( dev['devtype'] + "_" + dev['agt'] + "_" + dev['me']).lower().replace(":","_").replace("@","_"))
-        if dev['devtype'] in AIR_TYPES:
-            self._modes = LIFESMART_STATE_LIST
-            if cdata['O']['type'] % 2 == 0:
-                self._mode = LIFESMART_STATE_LIST[0]
+        self._name = dev["name"]
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            (dev["devtype"] + "_" + dev["agt"] + "_" + dev["me"])
+            .lower()
+            .replace(":", "_")
+            .replace("@", "_")
+        )
+        # one climate entity per device: ws messages carry various idx
+        self._entity_key = (self._devtype, self._agt, self._me, None)
+        cdata = dev.get("data", {})
+        self._attr_precision = PRECISION_WHOLE
+        self._attr_temperature_unit = UnitOfTemperature.CELSIUS
+        self._attr_target_temperature_step = 1
+        self._fanspeed = None
+        if dev["devtype"] in AIR_TYPES:
+            self._attr_hvac_modes = LIFESMART_STATE_LIST
+            mode_val = cdata.get("MODE", {}).get("val", 0)
+            if cdata.get("O", {}).get("type", 0) % 2 == 0:
+                self._attr_hvac_mode = LIFESMART_STATE_LIST[0]
             else:
-                self._mode = LIFESMART_STATE_LIST[cdata['MODE']['val']]
-            self._attributes.update({"last_mode": LIFESMART_STATE_LIST[cdata['MODE']['val']]})
-            _LOGGER.info("climate.py_self._attributes: %s",str(self._attributes))
-            self._current_temperature = cdata['T']['v']
-            self._target_temperature = cdata['tT']['v']
-            self._min_temp = 10
-            self._max_temp = 35
-            self._fanspeed = cdata['F']['val']
+                self._attr_hvac_mode = LIFESMART_STATE_LIST[mode_val]
+            self._attributes.setdefault("last_mode", LIFESMART_STATE_LIST[mode_val])
+            self._attr_current_temperature = cdata.get("T", {}).get("v")
+            self._attr_target_temperature = cdata.get("tT", {}).get("v")
+            self._attr_min_temp = 10
+            self._attr_max_temp = 35
+            self._fanspeed = cdata.get("F", {}).get("val", 0)
+            self._attr_supported_features = (
+                ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE
+            )
         else:
-            self._modes = LIFESMART_STATE_LIST2
-            if cdata['P1']['type'] % 2 == 0:
-                self._mode = LIFESMART_STATE_LIST2[0]
+            self._attr_hvac_modes = LIFESMART_STATE_LIST2
+            if cdata.get("P1", {}).get("type", 0) % 2 == 0:
+                self._attr_hvac_mode = LIFESMART_STATE_LIST2[0]
             else:
-                self._mode = LIFESMART_STATE_LIST2[1]
-            if cdata['P2']['type'] % 2 == 0:
-                self._attributes.setdefault('Heating',"false")
+                self._attr_hvac_mode = LIFESMART_STATE_LIST2[1]
+            if cdata.get("P2", {}).get("type", 0) % 2 == 0:
+                self._attributes.setdefault("Heating", "false")
             else:
-                self._attributes.setdefault('Heating',"true")
-            self._current_temperature = cdata['P4']['val'] / 10
-            self._target_temperature = cdata['P3']['val'] / 10
-            self._min_temp = 5
-            self._max_temp = 35
-
-    @property
-    def precision(self):
-        """Return the precision of the system."""
-        return PRECISION_WHOLE
-
-    @property
-    def temperature_unit(self):
-        """Return the unit of measurement used by the platform."""
-        return TEMP_CELSIUS
-
-    @property
-    def hvac_mode(self):
-        """Return current operation ie. heat, cool, idle."""
-        return self._mode
-
-    @property
-    def hvac_modes(self):
-        """Return the list of available operation modes."""
-        return self._modes
-
-    @property
-    def current_temperature(self):
-        """Return the current temperature."""
-        return self._current_temperature
-
-    @property
-    def target_temperature(self):
-        """Return the temperature we try to reach."""
-        return self._target_temperature
-
-    @property
-    def target_temperature_step(self):
-        """Return the supported step of target temperature."""
-        return 1
+                self._attributes.setdefault("Heating", "true")
+            self._attr_current_temperature = cdata.get("P4", {}).get("val", 0) / 10
+            self._attr_target_temperature = cdata.get("P3", {}).get("val", 0) / 10
+            self._attr_min_temp = 5
+            self._attr_max_temp = 35
+            self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
     @property
     def fan_mode(self):
         """Return the fan setting."""
-        fanmode = None
-        if self._fanspeed < 30:
-            fanmode = SPEED_LOW
-        elif self._fanspeed < 65 and self._fanspeed >= 30:
-            fanmode = SPEED_MEDIUM
-        elif self._fanspeed >=65:
-            fanmode = SPEED_HIGH
-        return fanmode
+        if self._fanspeed is None:
+            return None
+        return get_fan_mode(self._fanspeed)
 
     @property
     def fan_modes(self):
@@ -154,57 +122,72 @@ class LifeSmartClimateEntity(LifeSmartEntity, ClimateEntity):
 
     def set_temperature(self, **kwargs):
         """Set new target temperature."""
-        new_temp = int(kwargs['temperature']*10)
-        _LOGGER.info("set_temperature: %s",str(new_temp))
-        if self._devtype in AIR_TYPES:
-            super()._lifesmart_epset(self, "0x88", new_temp, "tT")
-        else:
-            super()._lifesmart_epset(self, "0x88", new_temp, "P3")
+        if ATTR_TEMPERATURE not in kwargs:
+            return
+        new_temp = int(kwargs[ATTR_TEMPERATURE] * 10)
+        _LOGGER.info("lifesmart set_temperature: %s", new_temp)
+        idx = "tT" if self._devtype in AIR_TYPES else "P3"
+        self._lifesmart_epset("0x88", new_temp, idx)
 
     def set_fan_mode(self, fan_mode):
         """Set new target fan mode."""
-        super()._lifesmart_epset(self, "0xCE", GET_FAN_SPEED[fan_mode], "F")
+        self._lifesmart_epset("0xCE", GET_FAN_SPEED[fan_mode], "F")
 
     def set_hvac_mode(self, hvac_mode):
         """Set new target operation mode."""
         if self._devtype in AIR_TYPES:
-            if hvac_mode == HVAC_MODE_OFF:
-                super()._lifesmart_epset(self, "0x80", 0, "O")
+            if hvac_mode == HVACMode.OFF:
+                self._lifesmart_epset("0x80", 0, "O")
                 return
-            if self._mode == HVAC_MODE_OFF:
-                if super()._lifesmart_epset(self, "0x81", 1, "O") == 0:
+            if self._attr_hvac_mode == HVACMode.OFF:
+                if self._lifesmart_epset("0x81", 1, "O") == 0:
                     time.sleep(2)
                 else:
                     return
-            super()._lifesmart_epset(self, "0xCE", LIFESMART_STATE_LIST.index(hvac_mode), "MODE")
+            self._lifesmart_epset(
+                "0xCE", LIFESMART_STATE_LIST.index(hvac_mode), "MODE"
+            )
         else:
-            if hvac_mode == HVAC_MODE_OFF:
-                super()._lifesmart_epset(self, "0x80", 0, "P1")
+            if hvac_mode == HVACMode.OFF:
+                self._lifesmart_epset("0x80", 0, "P1")
                 time.sleep(1)
-                super()._lifesmart_epset(self, "0x80", 0, "P2")
+                self._lifesmart_epset("0x80", 0, "P2")
                 return
+            if self._lifesmart_epset("0x81", 1, "P1") == 0:
+                time.sleep(2)
+
+    def handle_ws_update(self, msg):
+        """Update state from a websocket io message."""
+        idx = msg.get("idx")
+        ntype = msg.get("type")
+        nval = msg.get("val")
+        attrs = self._attributes
+        if idx == "O":
+            if ntype % 2 == 1:
+                self._attr_hvac_mode = attrs.get("last_mode", self._attr_hvac_mode)
             else:
-                if super()._lifesmart_epset(self, "0x81", 1, "P1") == 0:
-                    time.sleep(2)
-                else:
-                    return
-            
-
-
-    @property
-    def supported_features(self):
-        """Return the list of supported features."""
-        if self._devtype in AIR_TYPES:
-            return SUPPORT_TARGET_TEMPERATURE | SUPPORT_FAN_MODE
-        else:
-            return SUPPORT_TARGET_TEMPERATURE
-
-    @property
-    def min_temp(self):
-        """Return the minimum temperature."""
-        return self._min_temp
-
-    @property
-    def max_temp(self):
-        """Return the maximum temperature."""
-        return self._max_temp
+                self._attr_hvac_mode = HVACMode.OFF
+        elif idx == "P1":
+            if ntype % 2 == 1:
+                self._attr_hvac_mode = HVACMode.HEAT
+            else:
+                self._attr_hvac_mode = HVACMode.OFF
+        elif idx == "P2":
+            attrs["Heating"] = "true" if ntype % 2 == 1 else "false"
+        elif idx == "MODE":
+            if ntype == 206:
+                if self._attr_hvac_mode != HVACMode.OFF:
+                    self._attr_hvac_mode = LIFESMART_STATE_LIST[nval]
+                attrs["last_mode"] = LIFESMART_STATE_LIST[nval]
+        elif idx == "F":
+            if ntype == 206:
+                self._fanspeed = nval
+                attrs["fan_mode"] = get_fan_mode(nval)
+        elif idx in ("tT", "P3"):
+            if ntype == 136:
+                self._attr_target_temperature = msg.get("v")
+                attrs["temperature"] = msg.get("v")
+        elif idx in ("T", "P4"):
+            if ntype in (8, 9):
+                self._attr_current_temperature = msg.get("v")
+                attrs["current_temperature"] = msg.get("v")

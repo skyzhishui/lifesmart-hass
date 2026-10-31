@@ -1,21 +1,57 @@
 send_keys:
-  description: send keys.
+  description: Send IR keys via a LifeSmart SPOT/IR controller. In offline mode the ai is triggered locally as a station scene (RunA).
   fields:
-    me:
-      description: test.
-      example: '0010'
     agt:
-      description: test2.
-      example: '_xXXXXXXXXXXXXXXXXX'
+      description: AGT id of the hub.
+      example: 'A3XXXXXXXXXXXXXXXX'
+    me:
+      description: ME id of the IR device.
+      example: '0010'
     ai:
-      description: test3
+      description: AI id of the remote.
       example: 'AI_IR_xxxx_xxxxxxxx'
     category:
-      description: test4
+      description: Remote category.
       example: 'custom'
     brand:
-      description: test5
+      description: Remote brand.
       example: 'custom'
     keys:
-      description: test6
+      description: Keys to send (string or list).
       example: '["key"]'
+send_ackeys:
+  description: Send AC control IR keys via a LifeSmart SPOT/IR controller.
+  fields:
+    agt:
+      description: AGT id of the hub.
+      example: 'A3XXXXXXXXXXXXXXXX'
+    me:
+      description: ME id of the IR device.
+      example: '0010'
+    ai:
+      description: AI id of the remote.
+      example: 'AI_IR_xxxx_xxxxxxxx'
+    category:
+      description: Remote category.
+      example: 'ac'
+    brand:
+      description: Remote brand.
+      example: 'gree'
+    keys:
+      description: Keys to send (string or list).
+      example: '["power"]'
+    power:
+      description: Power state (1/0).
+      example: 1
+    mode:
+      description: AC mode value.
+      example: 0
+    temp:
+      description: Target temperature.
+      example: 26
+    wind:
+      description: Fan wind speed.
+      example: 0
+    swing:
+      description: Swing state.
+      example: 0

@@ -1,0 +1,47 @@
+{
+  "title": "LifeSmart",
+  "config": {
+    "step": {
+      "user": {
+        "title": "LifeSmart",
+        "description": "选择连接 LifeSmart 设备的方式。",
+        "data": {
+          "mode": "模式（online = 云端 API，offline = 局域网站点）"
+        }
+      },
+      "online": {
+        "title": "LifeSmart 云端（在线模式）",
+        "description": "填写 LifeSmart 开放平台的云端 API 凭据。",
+        "data": {
+          "appkey": "AppKey",
+          "apptoken": "AppToken",
+          "username": "LifeSmart 账号",
+          "password": "LifeSmart 密码"
+        }
+      },
+      "offline": {
+        "title": "LifeSmart 智慧中心（离线/局域网模式）",
+        "description": "通过局域网直连智慧中心。local_username/local_password 为站点的本地管理员凭据（中心管理密码）；username/password 为云端账号，仅兜底模式需要。红外遥控列表查询仅在线模式支持。",
+        "data": {
+          "host": "站点 IP 地址",
+          "local_username": "站点本地管理员用户名",
+          "local_password": "中心管理密码",
+          "fallback": "站点不可达时回退到云端",
+          "appkey": "AppKey（仅兜底用）",
+          "apptoken": "AppToken（仅兜底用）",
+          "username": "云端账号（仅兜底用）",
+          "password": "云端密码（仅兜底用）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "连接失败（站点不可达或云端 API 出错）",
+      "invalid_auth": "认证失败（密码/凭据错误）",
+      "fallback_needs_cloud": "启用兜底需填写 AppKey/AppToken 和云端账号（username/password）",
+      "unknown": "未知错误"
+    },
+    "abort": {
+      "already_configured": "该站点/账号已配置过"
+    }
+  }
+}

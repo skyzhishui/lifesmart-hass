@@ -1,14 +1,31 @@
 """Support for lifesmart sensors."""
 import logging
 
-
-from homeassistant.const import (
-    TEMP_CELSIUS,
+from homeassistant.components.sensor import (
+    ENTITY_ID_FORMAT,
+    SensorDeviceClass,
+    SensorEntity,
 )
-DOMAIN = "sensor"
-ENTITY_ID_FORMAT = DOMAIN + ".{}"
+from homeassistant.const import (
+    LIGHT_LUX,
+    PERCENTAGE,
+    UnitOfTemperature,
+)
 
-from . import  LifeSmartEntity
+try:
+    # HA 2026+: concentration units moved to UnitOfDensity / UnitOfRatio
+    from homeassistant.const import UnitOfDensity, UnitOfRatio
+
+    _UNIT_PPM = UnitOfRatio.PARTS_PER_MILLION
+    _UNIT_MG_M3 = UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER
+except ImportError:
+    # HA <= 2025: plain string constants
+    from homeassistant.const import (
+        CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER as _UNIT_MG_M3,
+        CONCENTRATION_PARTS_PER_MILLION as _UNIT_PPM,
+    )
+
+from . import DOMAIN, LifeSmartEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,69 +39,63 @@ OT_SENSOR_TYPES = ["SL_SC_MHW",
 "SL_SC_G",
 "SL_SC_BG"]
 
+EV_SENSOR_TYPES = ["SL_SC_THL",
+"SL_SC_BE",
+"SL_SC_CQ"]
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+# websocket updates for OT sensors only cover these idx
+OT_UPDATE_IDX = ("Z", "V", "P3", "P4")
+
+
+async def async_setup_entry(hass, entry, async_add_entities):
     """Perform the setup for LifeSmart devices."""
+    store = hass.data[DOMAIN]
     devices = []
-    dev = discovery_info.get("dev")
-    param = discovery_info.get("param")
-    devices = []
-    for idx in dev['data']:
-        if dev['devtype'] in OT_SENSOR_TYPES and idx in ["Z","V","P3","P4"]:
-            devices.append(LifeSmartSensor(dev,idx,dev['data'][idx],param))
-        else:
-            devices.append(LifeSmartSensor(dev,idx,dev['data'][idx],param))
-    add_entities(devices)
+    for dev in store["platform_devices"].get("sensor", []):
+        for idx in dev.get("data", {}):
+            if dev["devtype"] in OT_SENSOR_TYPES and idx not in OT_UPDATE_IDX:
+                # OT devices only report battery/illuminance/air readings here
+                continue
+            devices.append(LifeSmartSensor(dev, idx, dev["data"][idx], store["param"]))
+    async_add_entities(devices)
 
 
-class LifeSmartSensor(LifeSmartEntity):
+class LifeSmartSensor(LifeSmartEntity, SensorEntity):
     """Representation of a LifeSmartSensor."""
 
     def __init__(self, dev, idx, val, param):
         """Initialize the LifeSmartSensor."""
         super().__init__(dev, idx, val, param)
-        self.entity_id = ENTITY_ID_FORMAT.format(( dev['devtype'] + "_" + dev['agt'] + "_" + dev['me'] + "_" + idx).lower())
-        devtype = dev['devtype']
-        if devtype in GAS_SENSOR_TYPES:
-            self._unit = "None"
-            self._device_class = "None"
-            self._state = val['val']
-        else:
-            if idx == "T" or idx == "P1":
-                self._device_class = "temperature"
-                self._unit = TEMP_CELSIUS
-            elif idx == "H" or idx == "P2":
-                self._device_class = "humidity"
-                self._unit = "%"
-            elif idx == "Z":
-                self._device_class = "illuminance"
-                self._unit = "lx"
-            elif idx == "V":
-                self._device_class = "battery"
-                self._unit = "%"
-            elif idx == "P3":
-                self._device_class = "None"
-                self._unit = "ppm"
-            elif idx == "P4":
-                self._device_class = "None"
-                self._unit = "mg/m3"
-            else:
-                self._unit = "None"
-                self._device_class = "None"
-            self._state = val['v']
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            (dev["devtype"] + "_" + dev["agt"] + "_" + dev["me"] + "_" + idx).lower()
+        )
+        devtype = dev["devtype"]
+        self._is_gas = devtype in GAS_SENSOR_TYPES
+        if self._is_gas:
+            self._attr_native_value = val.get("val")
+            return
+        if idx in ("T", "P1"):
+            self._attr_device_class = SensorDeviceClass.TEMPERATURE
+            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        elif idx in ("H", "P2"):
+            self._attr_device_class = SensorDeviceClass.HUMIDITY
+            self._attr_native_unit_of_measurement = PERCENTAGE
+        elif idx == "Z":
+            self._attr_device_class = SensorDeviceClass.ILLUMINANCE
+            self._attr_native_unit_of_measurement = LIGHT_LUX
+        elif idx == "V":
+            self._attr_device_class = SensorDeviceClass.BATTERY
+            self._attr_native_unit_of_measurement = PERCENTAGE
+        elif idx == "P3":
+            self._attr_native_unit_of_measurement = _UNIT_PPM
+        elif idx == "P4":
+            self._attr_native_unit_of_measurement = _UNIT_MG_M3
+        self._attr_native_value = val.get("v")
 
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement of this entity, if any."""
-        return self._unit
-
-    @property
-    def device_class(self):
-        """Return the device class of this entity."""
-        return self._device_class
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
+    def handle_ws_update(self, msg):
+        """Update state from a websocket io message."""
+        if self._is_gas:
+            if msg.get("val", 0) > 0:
+                self._attr_native_value = msg["val"]
+            return
+        self._attr_native_value = msg.get("v")
