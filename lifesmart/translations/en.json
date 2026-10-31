@@ -1,0 +1,47 @@
+{
+  "title": "LifeSmart",
+  "config": {
+    "step": {
+      "user": {
+        "title": "LifeSmart",
+        "description": "Choose how to talk to your LifeSmart devices.",
+        "data": {
+          "mode": "Mode (online = cloud API, offline = LAN station)"
+        }
+      },
+      "online": {
+        "title": "LifeSmart cloud (online)",
+        "description": "Cloud OpenAPI credentials from the LifeSmart open platform.",
+        "data": {
+          "appkey": "AppKey",
+          "apptoken": "AppToken",
+          "username": "LifeSmart account",
+          "password": "LifeSmart password"
+        }
+      },
+      "offline": {
+        "title": "LifeSmart station (offline / LAN)",
+        "description": "Talk to the Smart Station directly over LAN. local_username/local_password are the station's local admin credentials (center management password). username/password are the cloud account and are only needed for fallback. IR remote list queries are only available in online mode.",
+        "data": {
+          "host": "Station IP address",
+          "local_username": "Station local admin username",
+          "local_password": "Center management password",
+          "fallback": "Fall back to cloud when the station is unreachable",
+          "appkey": "AppKey (fallback only)",
+          "apptoken": "AppToken (fallback only)",
+          "username": "Cloud account (fallback only)",
+          "password": "Cloud password (fallback only)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect (station unreachable or cloud API error)",
+      "invalid_auth": "Invalid authentication (wrong password / credentials)",
+      "fallback_needs_cloud": "Fallback requires AppKey/AppToken and the cloud account (username/password)",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This station/account is already configured"
+    }
+  }
+}

@@ -1,51 +1,49 @@
-"""Support for LifeSmart Gateway Light."""
+"""Support for LifeSmart lights."""
 import binascii
 import logging
 import struct
-import urllib.request
-import json
-import time
-import hashlib
-from homeassistant.components.light import (
-    ATTR_BRIGHTNESS,
-    ATTR_HS_COLOR,
-    SUPPORT_BRIGHTNESS,
-    SUPPORT_COLOR,
-    LightEntity,
-	ENTITY_ID_FORMAT,
-)
-import homeassistant.util.color as color_util
 
-from . import  LifeSmartEntity
+import homeassistant.util.color as color_util
+from homeassistant.components.light import (
+    ATTR_HS_COLOR,
+    ColorMode,
+    ENTITY_ID_FORMAT,
+    LightEntity,
+    LightEntityFeature,
+)
+
+from . import DOMAIN, LifeSmartEntity, _api_post, _sign, _system_block
 
 _LOGGER = logging.getLogger(__name__)
 
 
-
-def setup_platform(hass, config, add_entities, discovery_info=None):
+async def async_setup_entry(hass, entry, async_add_entities):
     """Perform the setup for LifeSmart devices."""
-    if discovery_info is None:
-        return
-    dev = discovery_info.get("dev")
-    param = discovery_info.get("param")
+    store = hass.data[DOMAIN]
     devices = []
-    for idx in dev['data']:
-        if idx in ["RGB","RGBW"]:
-            devices.append(LifeSmartLight(dev,idx,dev['data'][idx],param))
-    add_entities(devices)
+    for dev in store["platform_devices"].get("light", []):
+        devices += [
+            LifeSmartLight(dev, idx, dev["data"][idx], store["param"])
+            for idx in dev.get("data", {})
+            if idx in ("RGB", "RGBW")
+        ]
+    async_add_entities(devices)
+
 
 class LifeSmartLight(LifeSmartEntity, LightEntity):
     """Representation of a LifeSmartLight."""
 
+    _attr_supported_color_modes = {ColorMode.HS}
+    _attr_color_mode = ColorMode.HS
+
     def __init__(self, dev, idx, val, param):
         """Initialize the LifeSmartLight."""
         super().__init__(dev, idx, val, param)
-        self.entity_id = ENTITY_ID_FORMAT.format(( dev['devtype'] + "_" + dev['agt'] + "_" + dev['me'] + "_" + idx).lower())
-        if val['type'] % 2 == 1:
-            self._state = True
-        else:
-            self._state = False
-        value = val['val']
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            (dev["devtype"] + "_" + dev["agt"] + "_" + dev["me"] + "_" + idx).lower()
+        )
+        self._state = val["type"] % 2 == 1
+        value = val["val"]
         if value == 0:
             self._hs = None
         else:
@@ -55,18 +53,43 @@ class LifeSmartLight(LifeSmartEntity, LightEntity):
             rgba = struct.unpack("BBBB", rgbhex)
             rgb = rgba[1:]
             self._hs = color_util.color_RGB_to_hs(*rgb)
-            _LOGGER.info("hs_rgb: %s",str(self._hs))
-
+            _LOGGER.debug("lifesmart light %s hs: %s", self.entity_id, self._hs)
 
     async def async_added_to_hass(self):
+        """Add to hass and fetch the IR remote list of the hub."""
+        await super().async_added_to_hass()
+        if not self._appkey or not self._usertoken:
+            # IR remote list queries are cloud-only (online mode)
+            return
+        try:
+            rmlist = await self.hass.async_add_executor_job(
+                self._lifesmart_GetRemoteList
+            )
+        except (OSError, ValueError, KeyError) as err:
+            _LOGGER.warning(
+                "lifesmart %s: GetRemoteList failed: %s", self.entity_id, err
+            )
+            return
+        if not isinstance(rmlist, dict):
+            return
         rmdata = {}
-        rmlist = await self.hass.async_add_executor_job(LifeSmartLight._lifesmart_GetRemoteList,self)
         for ai in rmlist:
-            rms = await self.hass.async_add_executor_job(LifeSmartLight._lifesmart_GetRemotes,self,ai)
-            rms['category'] = rmlist[ai]['category']
-            rms['brand'] = rmlist[ai]['brand']
-            rmdata[ai] = rms
-        self._attributes.setdefault('remotelist',rmdata)
+            try:
+                rms = await self.hass.async_add_executor_job(
+                    self._lifesmart_GetRemotes, ai
+                )
+                rms["category"] = rmlist[ai].get("category")
+                rms["brand"] = rmlist[ai].get("brand")
+                rmdata[ai] = rms
+            except (OSError, ValueError, KeyError, TypeError) as err:
+                _LOGGER.warning(
+                    "lifesmart %s: GetRemote(%s) failed: %s", self.entity_id, ai, err
+                )
+                continue
+        if rmdata:
+            self._attributes.setdefault("remotelist", rmdata)
+            self.async_write_ha_state()
+
     @property
     def is_on(self):
         """Return true if it is on."""
@@ -78,91 +101,74 @@ class LifeSmartLight(LifeSmartEntity, LightEntity):
         return self._hs
 
     @property
+    def effect_list(self):
+        """Return the list of supported IR remotes as effects."""
+        rmdata = self._attributes.get("remotelist")
+        return list(rmdata) if rmdata else None
+
+    @property
     def supported_features(self):
         """Return the supported features."""
-        return SUPPORT_COLOR
+        if self._attributes.get("remotelist"):
+            return LightEntityFeature.EFFECT
+        return LightEntityFeature(0)
 
     def turn_on(self, **kwargs):
         """Turn the light on."""
         if ATTR_HS_COLOR in kwargs:
             self._hs = kwargs[ATTR_HS_COLOR]
-
+        if self._hs is None:
+            # no known color yet: just power the light on
+            if self._lifesmart_epset("0x81", 1, self._idx) == 0:
+                self._state = True
+                self.schedule_update_ha_state()
+            return
         rgb = color_util.color_hs_to_RGB(*self._hs)
         rgba = (0,) + rgb
         rgbhex = binascii.hexlify(struct.pack("BBBB", *rgba)).decode("ASCII")
         rgbhex = int(rgbhex, 16)
-
-        if super()._lifesmart_epset(self, "0xff", rgbhex, self._idx) == 0:
+        if self._lifesmart_epset("0xff", rgbhex, self._idx) == 0:
             self._state = True
             self.schedule_update_ha_state()
 
     def turn_off(self, **kwargs):
         """Turn the light off."""
-        if super()._lifesmart_epset(self, "0x80", 0, self._idx) == 0:
+        if self._lifesmart_epset("0x80", 0, self._idx) == 0:
             self._state = False
             self.schedule_update_ha_state()
-    @staticmethod
-    def _lifesmart_GetRemoteList(self):
-        appkey = self._appkey
-        apptoken = self._apptoken
-        usertoken = self._usertoken
-        userid = self._userid
-        agt = self._agt
-        url = "https://api.ilifesmart.com/app/irapi.GetRemoteList"
-        tick = int(time.time())
-        sdata = "method:GetRemoteList,agt:"+agt+",time:"+str(tick)+",userid:"+userid+",usertoken:"+usertoken+",appkey:"+appkey+",apptoken:"+apptoken
-        sign = hashlib.md5(sdata.encode(encoding='UTF-8')).hexdigest()
-        send_values ={
-          "id": 1,
-          "method": "GetRemoteList",
-          "params": {
-              "agt": agt
-          }, 
-          "system": {
-          "ver": "1.0",
-          "lang": "en",
-          "userid": userid,
-          "appkey": appkey,
-          "time": tick,
-          "sign": sign
-          }
-        }
-        header = {'Content-Type': 'application/json'}
-        send_data = json.dumps(send_values)
-        req = urllib.request.Request(url=url, data=send_data.encode('utf-8'), headers=header, method='POST')
-        response = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
-        return response['message']
 
-    @staticmethod
-    def _lifesmart_GetRemotes(self,ai):
-        appkey = self._appkey
-        apptoken = self._apptoken
-        usertoken = self._usertoken
-        userid = self._userid
-        agt = self._agt
-        url = "https://api.ilifesmart.com/app/irapi.GetRemote"
-        tick = int(time.time())
-        sdata = "method:GetRemote,agt:"+agt+",ai:"+ai+",needKeys:2,time:"+str(tick)+",userid:"+userid+",usertoken:"+usertoken+",appkey:"+appkey+",apptoken:"+apptoken
-        sign = hashlib.md5(sdata.encode(encoding='UTF-8')).hexdigest()
-        send_values ={
-          "id": 1,
-          "method": "GetRemote",
-          "params": {
-              "agt": agt,
-              "ai": ai,
-              "needKeys": 2
-          },
-          "system": {
-          "ver": "1.0",
-          "lang": "en",
-          "userid": userid,
-          "appkey": appkey,
-          "time": tick,
-          "sign": sign
-          }
+    def handle_ws_update(self, msg):
+        """Update state from a websocket io message."""
+        self._state = msg["type"] % 2 == 1
+
+    def _lifesmart_GetRemoteList(self):
+        """Fetch the IR remote list of the hub (blocking, run in executor)."""
+        params = [("agt", self._agt)]
+        tick, sign = _sign("GetRemoteList", params, self._usertoken, self._userid,
+                           self._appkey, self._apptoken)
+        send_values = {
+            "id": 1,
+            "method": "GetRemoteList",
+            "params": {"agt": self._agt},
+            "system": _system_block(tick, sign, self._userid, self._appkey),
         }
-        header = {'Content-Type': 'application/json'}
-        send_data = json.dumps(send_values)
-        req = urllib.request.Request(url=url, data=send_data.encode('utf-8'), headers=header, method='POST')
-        response = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
-        return response['message']['codes']
+        response = _api_post(
+            "https://api.ilifesmart.com/app/irapi.GetRemoteList", send_values
+        )
+        return response["message"]
+
+    def _lifesmart_GetRemotes(self, ai):
+        """Fetch one IR remote's codes (blocking, run in executor)."""
+        params = [("agt", self._agt), ("ai", ai), ("needKeys", 2)]
+        tick, sign = _sign("GetRemote", params, self._usertoken, self._userid,
+                           self._appkey, self._apptoken)
+        send_values = {
+            "id": 1,
+            "method": "GetRemote",
+            "params": {"agt": self._agt, "ai": ai, "needKeys": 2},
+            "system": _system_block(tick, sign, self._userid, self._appkey),
+        }
+        response = _api_post(
+            "https://api.ilifesmart.com/app/irapi.GetRemote", send_values
+        )
+        return response["message"]["codes"]

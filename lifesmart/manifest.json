@@ -1,11 +1,16 @@
 {
   "domain": "lifesmart",
   "name": "lifesmart",
-  "documentation": "https://github.com/skyzhishui/custom_components",
-  "requirements": [],
+  "documentation": "https://github.com/skyzhishui/lifesmart-hass",
+  "requirements": [
+    "websocket-client>=1.6.1"
+  ],
   "dependencies": [],
   "codeowners": [
     "@skyzhishui"
   ],
-  "version": "23.10.26"
+  "iot_class": "cloud_push",
+  "integration_type": "hub",
+  "version": "26.10.31.1",
+  "config_flow": true
 }

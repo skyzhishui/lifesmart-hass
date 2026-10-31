@@ -1,0 +1,30 @@
+{
+  "entity": {
+    "switch": {
+      "default": "mdi:power"
+    },
+    "light": {
+      "default": "mdi:lightbulb"
+    },
+    "climate": {
+      "default": "mdi:air-conditioner"
+    },
+    "cover": {
+      "default": "mdi:curtains"
+    },
+    "sensor": {
+      "default": "mdi:eye"
+    },
+    "binary_sensor": {
+      "default": "mdi:motion-sensor"
+    }
+  },
+  "services": {
+    "send_keys": {
+      "service": "mdi:remote"
+    },
+    "send_ackeys": {
+      "service": "mdi:air-conditioner"
+    }
+  }
+}
